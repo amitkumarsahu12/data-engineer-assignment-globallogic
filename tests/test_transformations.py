@@ -142,6 +142,17 @@ def test_fct_applications_transformation():
 
     assert distinct_values <= 2, "is_hired should only have TRUE/FALSE values"
 
+    cursor.execute(
+        """
+        SELECT COUNT(*)
+        FROM warehouse.fct_applications
+        WHERE COALESCE(is_hired_before_applied_anomaly, FALSE) = TRUE
+        """
+    )
+    anomaly_count = cursor.fetchone()[0]
+
+    assert anomaly_count >= 1, "Expected at least one hired-before-applied anomaly to be flagged"
+
     conn.close()
 
 

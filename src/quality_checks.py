@@ -1,7 +1,7 @@
 import logging
 import psycopg2
 
-from config import DB_CONFIG
+from config import DB_CONFIG, JOBS_FILE, APPLICATIONS_FILE
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -9,6 +9,52 @@ logger = logging.getLogger(__name__)
 
 def get_connection():
     return psycopg2.connect(**DB_CONFIG)
+
+
+DATE_FORMAT_PATTERNS = {
+    'YYYY-MM-DD (ISO standard)': r'^\d{4}-\d{2}-\d{2}$',
+    'YYYY/MM/DD (slash)': r'^\d{4}/\d{2}/\d{2}$',
+    'YYYY.MM.DD (dot)': r'^\d{4}\.\d{2}\.\d{2}$',
+    'DD-Mon-YYYY (abbreviated month)': r'^\d{2}-[A-Za-z]{3}-\d{4}$',
+    'Month DD, YYYY (full month)': r'^[A-Za-z]+ \d{1,2}, \d{4}$',
+    'Mon DD, YYYY (abbreviated month)': r'^[A-Za-z]{3} \d{1,2}, \d{4}$',
+    'DD-MM-YYYY': r'^\d{2}-\d{2}-\d{4}$',
+    'ISO timestamp': r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$',
+}
+
+
+def summarize_date_formats(csv_path, column_name, dataset_name):
+    """Analyze a CSV source column and return counts by raw date format."""
+    import csv
+    import re
+
+    logger.info(f"Checking date format consistency in {dataset_name}")
+
+    format_summary = {fmt: 0 for fmt in DATE_FORMAT_PATTERNS.keys()}
+    format_summary['UNMATCHED'] = 0
+
+    with open(csv_path, 'r', encoding='utf-8') as source_file:
+        reader = csv.DictReader(source_file)
+        for row in reader:
+            raw_value = row.get(column_name, '').strip().strip('"').strip("'")
+            if not raw_value:
+                continue
+
+            matched = False
+            for fmt, pattern in DATE_FORMAT_PATTERNS.items():
+                if re.match(pattern, raw_value):
+                    format_summary[fmt] += 1
+                    matched = True
+                    break
+
+            if not matched:
+                format_summary['UNMATCHED'] += 1
+
+    for fmt, count in format_summary.items():
+        if count > 0:
+            logger.info(f"{dataset_name} date format '{fmt}': {count} records")
+
+    return format_summary
 
 
 # CHECK 1: DUPLICATES
@@ -169,7 +215,60 @@ def check_volume_anomaly(conn):
     return results
 
 
+# ======================================================
+# CHECK 6: EMPTY DEPARTMENTS
+# ======================================================
+
+def check_empty_departments(conn):
+
+    logger.info("Checking for empty departments")
+
+    query = """
+    SELECT COUNT(*)
+    FROM raw.raw_jobs
+    WHERE department IS NULL OR TRIM(department) = ''
+    """
+
+    cursor = conn.cursor()
+    cursor.execute(query)
+
+    count = cursor.fetchone()[0]
+
+    logger.info(f"Jobs with empty departments: {count}")
+    
+    return count
+
+
+# ======================================================
+# CHECK 7: DATE FORMAT CONSISTENCY
+# ======================================================
+
+def check_job_date_format_consistency(conn):
+    """Audit raw source date formats in jobs.csv."""
+    del conn
+    return summarize_date_formats(JOBS_FILE, 'posted_date', 'jobs.csv')
+
+
+def check_application_date_format_consistency(conn):
+    """Audit raw source date formats in applications.csv."""
+    del conn
+    return summarize_date_formats(APPLICATIONS_FILE, 'apply_date', 'applications.csv')
+
+
+def check_date_format_consistency(conn):
+    """
+    Backward-compatible combined date format audit for source CSV files.
+    Returns date format summaries for both jobs and applications.
+    """
+    return {
+        'jobs': check_job_date_format_consistency(conn),
+        'applications': check_application_date_format_consistency(conn),
+    }
+
+
+# ======================================================
 # RUN ALL CHECKS
+# ======================================================
 def run_quality_checks():
 
     logger.info("Running data quality checks")
@@ -183,6 +282,9 @@ def run_quality_checks():
         detect_hired_before_applied(conn)
         check_data_freshness(conn)
         check_volume_anomaly(conn)
+        check_empty_departments(conn)
+        check_job_date_format_consistency(conn)
+        check_application_date_format_consistency(conn)
 
     finally:
 

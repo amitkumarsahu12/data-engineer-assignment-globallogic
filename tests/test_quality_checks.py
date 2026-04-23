@@ -7,6 +7,10 @@ from src.quality_checks import (
     detect_hired_before_applied,
     check_data_freshness,
     check_volume_anomaly,
+    check_empty_departments,
+    check_job_date_format_consistency,
+    check_application_date_format_consistency,
+    check_date_format_consistency,
 )
 
 
@@ -162,3 +166,71 @@ def test_volume_anomaly_detection():
     for table_name, row_count in volume_results:
         assert isinstance(row_count, int), f"{table_name}: row count should be integer"
         assert row_count >= 0, f"{table_name}: row count should be non-negative"
+
+
+def test_check_empty_departments():
+    """Verify empty department detection works correctly."""
+
+    conn = get_connection()
+
+    empty_dept_count = check_empty_departments(conn)
+
+    conn.close()
+
+    assert isinstance(empty_dept_count, int), "Empty department count should be an integer"
+    assert empty_dept_count >= 0, "Empty department count should be non-negative"
+
+
+def assert_date_format_summary(format_summary):
+    """Validate the shared structure of a date format summary."""
+    assert isinstance(format_summary, dict), "Date format summary should be a dictionary"
+    assert len(format_summary) > 0, "Should have detected at least one date format"
+
+    total_records = 0
+    for fmt, count in format_summary.items():
+        assert isinstance(count, int), f"Format '{fmt}': count should be integer"
+        assert count >= 0, f"Format '{fmt}': count should be non-negative"
+        total_records += count
+
+    assert total_records > 0, "Should have categorized at least one date record"
+
+    formats_with_records = [fmt for fmt, count in format_summary.items() if count > 0]
+    assert len(formats_with_records) >= 1, "Should have detected at least one date format with records"
+
+
+def test_check_job_date_format_consistency():
+    """Verify job date format detection identifies multiple source formats."""
+
+    conn = get_connection()
+
+    format_summary = check_job_date_format_consistency(conn)
+
+    conn.close()
+
+    assert_date_format_summary(format_summary)
+
+
+def test_check_application_date_format_consistency():
+    """Verify application date format detection identifies multiple source formats."""
+
+    conn = get_connection()
+
+    format_summary = check_application_date_format_consistency(conn)
+
+    conn.close()
+
+    assert_date_format_summary(format_summary)
+
+
+def test_check_date_format_consistency():
+    """Verify the combined date audit returns jobs and applications summaries."""
+
+    conn = get_connection()
+
+    format_summary = check_date_format_consistency(conn)
+
+    conn.close()
+
+    assert set(format_summary.keys()) == {"jobs", "applications"}
+    assert_date_format_summary(format_summary["jobs"])
+    assert_date_format_summary(format_summary["applications"])

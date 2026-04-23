@@ -34,6 +34,15 @@ ON warehouse.fct_workflow_events (
 );
 
 -- =========================================================
+-- CLEANUP
+-- =========================================================
+
+DELETE FROM warehouse.fct_workflow_events
+WHERE application_id IS NULL
+OR new_status IS NULL
+OR event_timestamp IS NULL;
+
+-- =========================================================
 -- LOAD / UPSERT
 -- =========================================================
 
@@ -56,6 +65,8 @@ SELECT
 FROM raw.raw_workflow_events
 
 WHERE application_id IS NOT NULL
+AND new_status IS NOT NULL
+AND event_timestamp IS NOT NULL
 
 ON CONFLICT (
     application_id,

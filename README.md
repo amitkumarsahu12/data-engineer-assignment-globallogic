@@ -2,232 +2,219 @@
 
 ## Overview
 
-This project implements an end-to-end data engineering pipeline that ingests raw datasets, transforms them into a star schema, performs data quality validation, and calculates business metrics.
+This repository implements an end-to-end data pipeline for a recruiting dataset. The solution covers:
 
-The solution emphasizes:
+- Raw data ingestion into PostgreSQL
+- Warehouse-style SQL transformations
+- Data quality checks
+- Business analysis queries
+- Unit and integration-style tests
 
-- Idempotent pipelines
-- Data quality validation
-- Reproducibility
-- Scalability considerations
-- Clean modular architecture
+The implementation is designed to satisfy all three task groups from the assignment with a simple local setup based on Python, PostgreSQL, Docker, SQL, and Pytest.
 
----
+## How To Run
+
+### Prerequisites
+
+- Docker / Docker Compose
+- Python 3
+- `psql` client
+
+### Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### Set PostgreSQL Password
+
+The shell scripts expect `PGPASSWORD` to be set. The repo already includes a local `.env` file for this.
+
+If needed, export it manually:
+
+```bash
+export PGPASSWORD=postgres
+```
+
+### Run The Full Pipeline
+
+```bash
+bash run_all.sh
+```
+
+This will:
+
+1. Start PostgreSQL in Docker
+2. Create raw tables and indexes
+3. Run ingestion
+4. Run analysis queries
+5. Build warehouse models
+6. Run quality checks
+7. Run the full test suite
+
+### Run Task Groups Separately
+
+```bash
+bash task_group1_run_pipeline.sh
+bash task_group2_run_pipeline.sh
+bash task_group3_run_pipeline.sh
+```
+
+### Run Tests Only
+
+```bash
+pytest -v
+```
 
 ## Architecture
 
-Raw Files
-   ↓
-Python Ingestion
-   ↓
-PostgreSQL (Raw Layer)
-   ↓
-SQL Transformations
-   ↓
-Star Schema (Warehouse Layer)
-   ↓
-Data Quality Checks
-   ↓
-Business Metrics
+The pipeline follows a layered warehouse-style design:
 
----
+`source files -> raw PostgreSQL tables -> warehouse models -> quality checks -> metrics`
 
-## Technology Stack
+### Raw Layer
 
-Python  
-PostgreSQL  
-Docker  
-SQL  
-Pytest  
+The raw layer stores data from:
 
----
+- `jobs.csv`
+- `candidates.json`
+- `education.csv`
+- `applications.csv`
+- `workflow_events.jsonl`
 
-## Why PostgreSQL
+These files are ingested into `raw.*` tables through [`src/ingestion.py`](/Users/amitkumarsahu/VSCode/data-engineer-assignment-globallogic-amitkumarsahu/src/ingestion.py).
 
-PostgreSQL was selected because:
+### Warehouse Layer
 
-- ACID-compliant
-- Supports UPSERT
-- Production-ready
-- Widely used in data platforms
-- Supports indexing and constraints
+The warehouse layer is built with SQL scripts in [`models/`](/Users/amitkumarsahu/VSCode/data-engineer-assignment-globallogic-amitkumarsahu/models):
 
----
+- `dim_job`
+- `dim_candidate`
+- `fct_applications`
+- `fct_workflow_events`
 
-## Idempotency Strategy
+This keeps the transformation logic explicit, easy to review, and easy to rerun locally.
 
-All ingestion and transformation operations are designed to be idempotent.
+### Quality Layer
 
-Implemented using:
+Quality checks are implemented in [`src/quality_checks.py`](/Users/amitkumarsahu/VSCode/data-engineer-assignment-globallogic-amitkumarsahu/src/quality_checks.py) and cover:
 
-- Primary keys
-- UPSERT logic
-- ON CONFLICT handling
-- Deterministic transformations
+- Duplicate applications
+- Null candidate IDs
+- Data freshness
+- Volume anomalies
+- Empty departments
+- Mixed source date formats
+- `Hired before Applied` anomalies
 
-This ensures pipelines can be safely re-run without duplicating data.
+## Trade-Offs And Design Decisions
 
----
+### Database Choice
 
-## Data Quality Framework
+PostgreSQL was chosen because it supports:
 
-Automated checks implemented:
+- Primary keys and foreign keys
+- `ON CONFLICT` upsert patterns
+- JSONB for semi-structured candidate data
+- SQL transformations and indexing in a single local environment
 
-- Duplicate detection
-- Null value validation
-- Referential integrity validation
-- Anomaly detection
+This was a practical choice for a take-home assignment because it keeps ingestion, transformation, and validation in one place.
 
----
+### Transformation Approach
 
-## Anomaly Detection
+I used plain SQL model files instead of dbt or Spark.
 
-The dataset contains cases where:
+Why:
 
-Hired event occurs before Apply event.
+- Lower setup overhead for a local assignment
+- Easy to inspect and explain
+- Good fit for the data volume in this repo
+- Still supports idempotent warehouse rebuilds
 
-Strategy implemented:
+The trade-off is that dbt would provide stronger dependency management, documentation, and testing conventions for a larger production-grade project.
 
-Records are flagged and logged rather than deleted to preserve auditability.
+### Idempotency Strategy
 
----
+Idempotency is handled through:
 
-## Performance and Scaling Strategy
+- Primary keys on raw and warehouse entities
+- `ON CONFLICT DO UPDATE` / `DO NOTHING`
+- Unique indexes for workflow events
+- Deterministic SQL transformations
 
-If workflow_events grows to 10TB:
+This allows repeated pipeline runs without duplicating business entities or event rows.
 
-The pipeline would be modified to:
+### Data Quality Strategy
 
-- Use distributed processing (Spark)
-- Partition data by date
-- Use columnar storage
-- Perform incremental ingestion
-- Parallelize reads and writes
+The solution favors preserving source truth and flagging anomalies instead of silently correcting them.
 
----
+Examples:
+
+- Mixed date formats are parsed during ingestion and audited separately
+- Empty job departments are mapped to `Unknown` in the dimension layer
+- `Hired before Applied` rows are flagged in the warehouse and excluded from time-to-hire metrics
+
+This keeps the raw layer auditable while protecting downstream reporting.
+
+## Answers To Written Questions
+
+### How Mixed Date Formats Are Handled
+
+Source files contain multiple date formats in `jobs.csv`, `applications.csv`, and workflow events. The ingestion layer uses a custom parser that supports:
+
+- `YYYY-MM-DD`
+- `YYYY/MM/DD`
+- `YYYY.MM.DD`
+- `DD-Mon-YYYY`
+- `Month DD, YYYY`
+- `Mon DD, YYYY`
+- `DD-MM-YYYY`
+- ISO timestamps such as `2025-11-08T00:00:00`
+
+If parsing fails, the value is logged and loaded as `NULL` instead of crashing the pipeline.
+
+### How The Hired-Before-Applied Anomaly Is Handled
+
+The dataset contains at least one case where a `Hired` workflow event occurs before the application date.
+
+Handling strategy:
+
+- Keep the raw record unchanged
+- Flag the row in `warehouse.fct_applications` with `is_hired_before_applied_anomaly = TRUE`
+- Exclude flagged rows from the time-to-hire metric
+
+I chose flagging instead of deletion or auto-correction because it preserves auditability and avoids inventing data.
+
+## Performance And Scaling
+
+For the current assignment-sized dataset, the local Python + PostgreSQL approach is appropriate.
+
+If `workflow_events.jsonl` grew to 10TB, I would change the design as follows:
+
+1. Use distributed processing such as Spark for parsing and batch ingestion.
+2. Partition workflow events by event date.
+3. Load incrementally instead of reprocessing the full history every run.
+4. Use columnar intermediate storage such as Parquet for cheaper storage and faster scans.
+5. Write into PostgreSQL through staging tables or move analytical serving to a warehouse/lakehouse engine better suited to that scale.
+
+The current design optimizes for clarity and correctness. A 10TB design would optimize for partitioning, parallelism, fault tolerance, and incremental state management.
 
 ## Project Structure
-data-engineer-assignment/
 
-docker/
-docker-compose.yml
-
+```text
+data/
+models/
 sql/
-schema.sql
-analysis_queries.sql
-
 src/
-ingestion.py
-transformations.py
-quality_checks.py
-config.py
-
 tests/
-test_ingestion.py
-test_quality.py
-
-README.md
+docker-compose.yml
 requirements.txt
+run_all.sh
+task_group1_run_pipeline.sh
+task_group2_run_pipeline.sh
+task_group3_run_pipeline.sh
+```
 
+## AI Statement
 
----
-
-## Setup Instructions
-
-### Step 1 — Start Database
-docker compose up -d
-
-
----
-
-### Step 2 — Install Dependencies
-pip install -r requirements.txt
-
-
----
-
-### Step 3 — Create Tables
-psql -h localhost -U postgres -d de_assignment -f sql/schema.sql
-
-Password:
-postgres
-
-
----
-
-### Step 4 — Run Ingestion
-python src/ingestion.py
-
-
----
-
-### Step 5 — Run Transformations
-python src/transformations.py
-
-
----
-
-### Step 6 — Run Data Quality Checks
-python src/quality_checks.py
-
-
----
-
-### Step 7 — Run Tests
-pytest
-
-
----
-
-## SQL Analysis Questions
-
-### How many jobs are currently open?
-SELECT COUNT(*)
-FROM raw.raw_jobs
-WHERE status = 'OPEN';
-
-
----
-
-### Top 5 departments by applications
-SELECT department,
-COUNT(application_id)
-FROM raw.raw_jobs
-JOIN raw.raw_applications
-USING (job_id)
-GROUP BY department
-ORDER BY COUNT DESC
-LIMIT 5;
-
-
----
-
-### Candidates who applied to more than 3 jobs
-SELECT candidate_id
-FROM raw.raw_applications
-GROUP BY candidate_id
-HAVING COUNT(*) > 3;
-
-
----
-
-## Testing Strategy
-
-Unit tests validate:
-
-- Idempotent ingestion
-- Data integrity
-- Duplicate detection
-- Anomaly detection
-
----
-
-## AI Usage Statement
-
-AI tools were used to assist with:
-
-- Boilerplate code generation
-- Syntax validation
-- Architectural validation
-
-All implementation logic was reviewed and verified manually.
+AI tools were used as a productivity aid for drafting boilerplate, exploring edge cases, and speeding up debugging. All generated ideas and code were reviewed, tested, and adjusted manually before being kept. In particular, AI assistance was useful for tightening parser behavior, refining data-quality handling, and improving repo documentation, while final design choices and validation were done through direct inspection and pipeline/test execution.

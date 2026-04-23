@@ -43,7 +43,7 @@ SELECT DISTINCT
 
     job_id,
     title,
-    department,
+    COALESCE(NULLIF(TRIM(department), ''), 'Unknown') AS department,
     posted_date,
     status
 

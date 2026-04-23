@@ -2,7 +2,6 @@ import csv
 import json
 import logging
 from datetime import datetime
-from dateutil import parser
 
 import psycopg2
 from psycopg2.extras import execute_batch, Json
@@ -26,14 +25,55 @@ def get_connection():
     return psycopg2.connect(**DB_CONFIG)
 
 
-# DATE PARSER
+# ======================================================
+# DATE PARSER - Multi-format support
+# ======================================================
+# Supports:
+# - ISO 8601: 2024-11-28
+# - Slashes: 2025/07/25
+# - Dots: 2025.01.01
+# - Abbreviated month: 15-Jun-2025
+# - Full month: December 22, 2024
+# Falls back gracefully with warning logging
+
 def parse_date(value):
-    if not value:
+    """
+    Parse dates with multiple format support.
+    Returns datetime object or None if unparseable.
+    """
+    if not value or str(value).strip() == '':
         return None
+
+    # Remove quotes and extra whitespace
+    value = str(value).strip().strip('"').strip("'")
+
+    # Handle ISO timestamps such as 2025-11-08T00:00:00
     try:
-        return parser.parse(value)
-    except Exception:
-        return None
+        return datetime.fromisoformat(value)
+    except ValueError:
+        pass
+
+    # List of date formats to try (in order of likelihood)
+    formats = [
+        "%Y-%m-%d",           # 2024-11-28 (ISO standard)
+        "%Y/%m/%d",           # 2025/07/25 (slash separator)
+        "%Y.%m.%d",           # 2025.01.01 (dot separator)
+        "%d-%b-%Y",           # 15-Jun-2025 (abbreviated month)
+        "%B %d, %Y",          # December 22, 2024 (full month, comma)
+        "%b %d, %Y",          # Jun 15, 2024 (abbreviated month, comma)
+        "%d-%m-%Y",           # 15-12-2025 (day-month-year)
+    ]
+
+    # Try each format
+    for fmt in formats:
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+
+    # If all formats fail, log warning and return None
+    logger.warning(f"Could not parse date: '{value}' - setting to NULL")
+    return None
 
 
 # JOBS INGESTION
