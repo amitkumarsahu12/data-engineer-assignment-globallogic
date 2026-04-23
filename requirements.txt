@@ -3,4 +3,3 @@ python-dateutil
 pytest
 pytest-mock
 pandas
-duckdb

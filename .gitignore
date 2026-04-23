@@ -1,3 +1,4 @@
-# .gitignore
+.gitignore
 /.copilot
 *pycache*
+.DS_Store
